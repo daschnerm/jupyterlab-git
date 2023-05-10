@@ -51,6 +51,7 @@ async def execute(
     env: "Optional[Dict[str, str]]" = None,
     username: "Optional[str]" = None,
     password: "Optional[str]" = None,
+    create_lock: "Optional[bool]" = True,
 ) -> "Tuple[int, str, str]":
     """Asynchronously execute a command.
 
@@ -117,12 +118,13 @@ async def execute(
         output, error = process.communicate()
         return (process.returncode, output.decode("utf-8"), error.decode("utf-8"))
 
-    try:
-        await execution_lock.acquire(
-            timeout=datetime.timedelta(seconds=MAX_WAIT_FOR_EXECUTE_S)
-        )
-    except tornado.util.TimeoutError:
-        return (1, "", "Unable to get the lock on the directory")
+    if create_lock:
+        try:
+            await execution_lock.acquire(
+                timeout=datetime.timedelta(seconds=MAX_WAIT_FOR_EXECUTE_S)
+            )
+        except tornado.util.TimeoutError:
+            return (1, "", "Unable to get the lock on the directory")
 
     try:
         # Ensure our execution operation will succeed by first checking and waiting for the lock to be removed
@@ -161,7 +163,8 @@ async def execute(
         code, output, error = -1, "", traceback.format_exc()
         get_logger().warning("Fail to execute {!s}".format(cmdline), exc_info=True)
     finally:
-        execution_lock.release()
+        if create_lock:
+            execution_lock.release()
 
     return code, output, error
 
@@ -209,7 +212,7 @@ class Git:
             response["message"] = "\n".join(output).strip()
         else:
             cmd = ["git", "config", "--list"]
-            code, output, error = await execute(cmd, cwd=path)
+            code, output, error = await execute(cmd, cwd=path, create_lock=False)
             response = {"code": code}
 
             if code != 0:
@@ -350,7 +353,9 @@ class Git:
             )
         else:
             env["GIT_TERMINAL_PROMPT"] = "0"
-            code, _, fetch_error = await execute(cmd, cwd=cwd, env=env)
+            code, _, fetch_error = await execute(
+                cmd, cwd=cwd, env=env, create_lock=False
+            )
 
         result = {
             "code": code,
@@ -427,7 +432,7 @@ class Git:
         """
         Execute git status command & return the result.
         """
-        cmd = ["git", "status", "--porcelain", "-b", "-u", "-z"]
+        cmd = ["git", "--no-optional-locks", "status", "--porcelain", "-b", "-u", "-z"]
         code, status, my_error = await execute(cmd, cwd=path)
 
         if code != 0:
@@ -446,7 +451,7 @@ class Git:
             "--cached",
             "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
         ]
-        text_code, text_output, _ = await execute(command, cwd=path)
+        text_code, text_output, _ = await execute(command, cwd=path, create_lock=False)
 
         are_binary = dict()
         if text_code == 0:
@@ -659,7 +664,7 @@ class Git:
             if current:
                 cmd.append(current)
 
-        code, my_output, my_error = await execute(cmd, cwd=path)
+        code, my_output, my_error = await execute(cmd, cwd=path, create_lock=False)
 
         if code != 0:
             return {"code": code, "command": " ".join(cmd), "message": my_error}
@@ -720,7 +725,7 @@ class Git:
             "refs/heads/",
         ]
 
-        code, output, error = await execute(cmd, cwd=path)
+        code, output, error = await execute(cmd, cwd=path, create_lock=False)
         if code != 0:
             return {"code": code, "command": " ".join(cmd), "message": error}
 
@@ -786,7 +791,7 @@ class Git:
             "refs/remotes/",
         ]
 
-        code, output, error = await execute(cmd, cwd=path)
+        code, output, error = await execute(cmd, cwd=path, create_lock=False)
         if code != 0:
             return {"code": code, "command": " ".join(cmd), "message": error}
 
@@ -1150,6 +1155,7 @@ class Git:
                 command,
                 env=env,
                 cwd=path,
+                create_lock=False,
             )
 
         response = {"code": code, "message": output.strip()}
